@@ -20,7 +20,7 @@ Despite these similarities, agile modeling differs from agile programming in one
 
 Because the SOP operates in the context of browsers, servers, the HTTP protocol, and so on, a complete description would be overwhelming. So our model (like all models) abstracts away irrelevant aspects, such as how network packets are structured and routed. But it also simplifies some relevant aspects, which means that the model cannot fully account for all possible security vulnerabilities.
 
-For example, we treat HTTP requests like remote procedure calls, as if they occur at a single point in time, ignoring the fact that responses to requests might come out of order. We also assume that DNS (the domain name service) is static, so we cannot consider attacks in which a DNS binding changes during an interaction. In principle, though, it would be possible to extend our model to cover all these aspects, although it's in the very nature of security analysis that no model (even if it represents the entire codebase) can be guaranteed complete.
+For example, we treat HTTP requests like remote procedure calls, as if they occur at a single point in time, ignoring the fact that responses to requests might come out of order. We also assume that DNS (the domain name service) is static, so we cannot consider attacks in which a DNS binding changes during an interaction. In principle, though, it would be possible to extend our model to cover all these aspects, although it's in the very nature of security analysis that no model can expose all vulnerabilities, even if it represents the entire codebase.
 
 ## HTTP Protocol
 
@@ -67,7 +67,7 @@ one sig Dns {
 }
 ```
 
-The keyword `one` means that (for simplicity) we're going to restrict to exactly one domain name server, so that `Dns.map` will be the mapping used everywhere. Again, as with serving resources, this could be dynamic (and in fact there are known security attacks that rely on changing DNS bindings during an interaction) but we're simplifying.
+The keyword `one` means that (for simplicity) we're assuming exactly one domain name server; the expression `Dns.map` will represent a single, global mapping. The mapping is static -- another simplification. There are in fact known security attacks that rely on changing DNS bindings during an interaction, but we're ignoring that complication.
 
 In order to model HTTP requests, we also need the concept of _cookies_, so let's declare them:
 
@@ -112,13 +112,13 @@ One of the prominent features of Alloy is that a model, no matter how simple or 
 run {} for 3	-- generate an instance with up to 3 objects of every signature type
 ```
 
-As soon as the analyzer finds a possible instance of the system, it automatically produces its graphical representation, like the following:
+The analyzer conducts a systematic search for instances, and when it finds one that satisfies all the given constraints, it displays it graphically, like this:
 
 ![http-instance-1](fig-http-1.png)
 
 This instance shows a client (represented by node `Client`) sending an `HttpRequest` to `Server`, which, in response, returns a resource object and instructs the client to store `Cookie` at `Domain`. 
 
-Even though it's a tiny instance with seemingly few details, it already tells us something strange about the model -- note that the resource returned from the request (`Resource1`) does not actually exist in the server! Clearly, we neglected to specify an important part of the server; namely, that every response to a request must be a resource that the server stores. We can go back to our definition of `HttpRequest` and append the following constraint:
+Even though this instance is relatively trivial, it exposes an obvious flaw in our model. Although the server is holding a resource  (`Resource0`) that matches the path, it returned a different resources (`Resource1`) that does not actually exist on the server at all! Clearly, we neglected to specify an important constraint: that every response to a request must be a resource stored by the server against the given path. We can go back to our definition of `HttpRequest` and modify it accordingly:
 
 ```
 abstract sig HttpRequest extends Call { ... }{
@@ -127,7 +127,11 @@ abstract sig HttpRequest extends Call { ... }{
 }
 ```
 
-Instead of generating sample instances, we can ask the analyzer to *check* whether the model satisfies a property. For example, one property that we want is that whenever a client sends the same request multiple times, it always receives the same response back:
+Now if we run the analyzer again, we will see instances such as the following, in which the new constraint is taken into account:
+
+![http-instance-1a](fig-http-1a.png)
+
+Instead of generating sample instances, we can ask the analyzer to *check* whether the model satisfies a property. For example, one desirable property is that whenever a client sends the same request multiple times, it always receives the same response back:
 ```
 check { all r1, r2: HttpRequest | r1.url = r2.url implies r1.response = r2.response } for 3 
 ```
@@ -135,7 +139,7 @@ Given this `check` command, the analyzer explores every possible behavior of the
 
 ![http-instance-2](fig-http-2.png)
 
-This counterexample again shows an HTTP request being made by a client, but with two different servers (in Alloy, objects of the same type are distinguished with a numeric suffix). Note that while the DNS server maps `Domain` to both `Server0` and `Server1` (in reality, this is a common practice for load balancing), only `Server0` maps `Path` to a resource object, causing `HttpRequest0` to result in empty response; another error in our model! To fix this, we add an Alloy *fact* to ensure that any two servers mapped to the common host by the DNS provide the same set of resources:
+This counterexample again shows an HTTP request being made by a client, but with two different servers (in Alloy, objects of the same type are distinguished by appending numeric suffixes to their names). Note that while the DNS server maps `Domain` to both `Server0` and `Server1` (in reality, this is a common practice for load balancing), only `Server0` maps `Path` to a resource object, causing `HttpRequest0` to result in an empty response! To fix this, we might add an Alloy *fact* saying that any two servers that DNS maps a single host to must provide the same set of resources:
 
 ```
 fact ServerAssumption {
@@ -144,8 +148,6 @@ fact ServerAssumption {
 ```
 
 When we re-run the `check` command after adding the fact, the analyzer no longer reports any counterexamples for the property.
-
-These examples show how even simple, abstract instances can provide often surprising insights into the system being modeled. Alloy is well-suited for this type of agile modeling: start out by building a small model of the system, run an analysis, and incrementally grow the model based on feedback from the analysis results. 
 
 ## Browser
 
@@ -159,7 +161,7 @@ sig Browser extends Client {
 ```
 
 This is our first example of a signature with "dynamic fields". Alloy has no built-in notions of time or behavior, which means that a variety of idioms can be used. In this model, we're using a common idiom in which you introduce a set of times `sig Time {}`
-(a signature that is actually declared in the `call` module), and then you attach `Time` as a final column for every time-varying field. Take `cookies` for example. As explained above (when we were talking about the `resources` field of `Server`), `cookies` is a relation with three columns. For a browser `b`, `b.cookies` will be a relation from cookies to time, and `b.cookies.t` will be the cookies held in `b` at time `t`. Likewise, the `documents` field associates a set of documents with each browser at a given time.
+(a signature that is actually declared in the `call` module), and then you attach `Time` as a final column for every time-varying field. Take `cookies`, for example. As explained above (when we were talking about the `resources` field of `Server`), `cookies` is a relation with three columns. For a browser `b`, `b.cookies` will be a relation from cookies to time, and `b.cookies.t` will be the cookies held in `b` at time `t`. Likewise, the `documents` field associates a set of documents with each browser at a given time.
 
 A document has a URL, some content and domain:
 
@@ -206,18 +208,17 @@ documents.after = documents.before + from -> doc
 
 remember that `documents` is a 3-column relation on browsers, documents and times. The fields `before` and `after` come from the declaration of `Call` (which we haven't seen, but is included in the listing at the end), and represent the times before and after the call. The expression `documents.after` gives the mapping from browsers to documents after the call. So this constraint says that after the call, the mapping is the same, except for a new entry in the table mapping `from` to `doc`.
 
-Some constraints use the `++` operator which does a relational override (i.e, `e1 ++ e2` contains all tuples of `e2`, and additionally, any tuples of `e1` whose first element is not the first element of a tuple in `e2`). For example, the constraint
+Some constraints use the `++` operator, which represents relational override (i.e, `e1 ++ e2` contains all tuples of `e2`, and additionally, any tuples of `e1` whose first element is not the first element of a tuple in `e2`). For example, the constraint
 
 ```
 content.after = content.before ++ doc -> response
 ```
 
-says that after the call, the `content` mapping will be updated to map `doc` to `response` (clobbering any previous mapping of `doc`).
-If we where to use `+`, then the same document could map to multiple resources at the same time; which is hardly what we want.
+says that after the call, the `content` mapping is the mapping before, but updated to map `doc` to `response` (clobbering any previous mapping of `doc`). If we were to use `+` instead of `++`, the same document might map to multiple resources at the same time.
 
 ## Script
 
-Next, we will build on the HTTP and browser models to introduce *client-side scripts*, which represent a piece of code (typically in Javascript) executing inside a browser document (`context`). 
+Next, we will build on the HTTP and browser models to introduce the notion of a *client-side script*, which represents a piece of code (typically in Javascript) executing inside a browser document (`context`). 
 ```
 sig Script extends Client { context : Document }
 ```
@@ -247,11 +248,11 @@ abstract sig BrowserOp extends Call { doc : Document }{
   noBrowserChange[before, after]
 }
 ```
-Field `doc` refers to the document that will be accessed or manipulated by this call. The second constraint in the signature facts says that both `doc` and the document in which the script executes (`from.context`) must be documents that currently exist inside the browser. Finally, a `BrowserOp` may modify the state of a document, but not the set of documents or cookies* that are stored in the browser.
+Field `doc` refers to the document that will be accessed or manipulated by this call; additional parameters are inherited from `Call`, namely `from` and `to` representing the endpoints the browser operation is from and to, and `before` and `after` representing the times before and after the operation. The second constraint in the signature facts says that both `doc` and the document in which the script executes (`from.context`) must be documents that currently exist inside the browser. Finally, a `BrowserOp` may modify the state of a document, but not the set of documents or cookies* that are stored in the browser.
 
 (* actually, cookies can be associated with a document and modified using a browser API, but we will omit this detail for now.)
 
-A script can read from and write to various parts of a document (often called DOM elements). In a typical browser, there are a large number of API functions for accessing DOM (e.g., Document.getElementById), but enumerating all of them is not important for our purpose, we will simply group those into two types -- `ReadDom` and `WriteDom`:
+A script can read from and write to various parts of a document, through a data structure called the "DOM" (document object model). The browser typically provides a collection of API functions for accessing the DOM. Their details are not relevant here, and it suffices to consider just two archetypal operations, `ReadDom` and `WriteDom`, that read and write the DOM respectively:
 ```
 sig ReadDom extends BrowserOp { result : Resource }{
   result = doc.content.before
@@ -262,7 +263,7 @@ sig WriteDom extends BrowserOp { new_dom : Resource }{
   domain.after = domain.before
 }
 ```
-`ReadDom` returns the content the target document, but does not modify it; `WriteDom`, on the other hand, sets the new content of the target document to `new_dom`.
+`ReadDom` returns the content of the target document, but does not modify it; `WriteDom`, on the other hand, sets the new content of the target document to `new_dom`. Note that the `doc` argument in these operations is unconstrained, so they are non-deterministic. When analyzing such a model, there is no need for the user to provide sample values; the analyzer will pick values in order to make constraints true (or to invalidate a property being checked).
 
 In addition, a script can modify various properties of a document, such as its width, height, domain, and title. For the discussion of the SOP, we are only interested in the domain property, which can be modified by scripts using the `SetDomain` function:
 ```
@@ -294,7 +295,7 @@ These two instances tell us that extra measures are needed to restrict the behav
 
 ## Same Origin Policy
 
-Before we can state the SOP, the first thing we should do is to define what it means for two pages to have the *same* origin. Two URLs refer to the same origin if and only if they share the same hostname, protocol, and port:
+Before we can express the same origin policy, we must define what it means for two pages to have the *same* origin. Two URLs refer to the same origin if and only if they share the same hostname, protocol, and port:
 ```
 pred sameOrigin[u1, u2 : Url] {
   u1.host = u2.host and u1.protocol = u2.protocol and u1.port = u2.port
@@ -314,7 +315,7 @@ As we can see, the SOP is designed to prevent the two types of vulnerabilities t
 
 It turns out, however, that the SOP can be *too* restrictive. For example, sometimes you *do* want to allow communication between two documents of different origins. By the above definition of an origin, a script from `foo.example.com` would not be able to read the content of `bar.example.com`, or send a HTTP request to `www.example.com`, because these are all considered distinct hosts. 
 
-In order to allow some form of cross-origin communication when necessary, browsers implemented a variety of mechanisms for relaxing the SOP. Some of these are more well-thought-out than others, and some have serious flaws that, when badly used, could negate the security benefits of the SOP. In the following sections, we will describe the most common of these mechanisms, and discuss their potential security pitfalls.
+In order to allow some form of cross-origin communication when necessary, browsers implemented a variety of mechanisms for relaxing the SOP. Some of these are more well thought out than others, and some have serious flaws that, when badly used, could negate the security benefits of the SOP. In the following sections, we will describe the most common of these mechanisms, and discuss their potential security pitfalls.
 
 ## Mechanisms for Bypassing the SOP
 
